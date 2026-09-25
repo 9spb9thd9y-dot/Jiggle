@@ -1,0 +1,2041 @@
+-- ============================================================
+--  ALIEN HUB | Rayfield UI (v3 — full merged build)
+-- ============================================================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+local cloneref = cloneref or function(obj) return obj end
+
+-- [0] FFLAGS
+pcall(function()
+    setfflag("RemoteEventSingleInvocationSizeLimit", "2900")
+    setfflag("TouchSenderMaxBandwidthBpsScaling", "-2147000000")
+end)
+
+-- ============================================================
+--  CONFIG
+-- ============================================================
+local Config = {
+    Fly = true,
+    AutoHaki = true,
+    AutoV4 = true,
+    FlaggedM1 = true,
+    FruitM1 = true,
+    TweenToPlayer = false,
+    TweenToNearest = false,
+    ESP = true,
+    YOffset = 0,
+    IsRunning = true
+}
+
+local SelectedPlayer = nil
+local ActiveTween = nil
+local LastTargetPos = Vector3.new(0, 0, 0)
+local TweenSpeedVal = 350
+
+-- ============================================================
+--  CACHED NETWORK
+-- ============================================================
+local Net = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Net")
+local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
+local RegisterHit = Net:WaitForChild("RE/RegisterHit")
+local NetModule = require(Net)
+local CommF = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
+local commE = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommE")
+local MouseModule = ReplicatedStorage:FindFirstChild("Mouse")
+
+-- ============================================================
+--  SILENT AIM MODULE
+-- ============================================================
+local VSkillModule = loadstring(game:HttpGet("https://raw.githubusercontent.com/jaanu91/Ip/refs/heads/main/Uo"))()
+
+local camera = workspace.CurrentCamera
+
+local SilentAimModule = {}
+
+local Services = setmetatable({}, {
+    __index = function(self, serviceName)
+        local good, service = pcall(game.GetService, game, serviceName);
+        if (good) then
+            self[serviceName] = service
+            return service;
+        end
+    end
+});
+
+local SilentAimPlayersEnabled = false
+local SilentAimNPCsEnabled = false
+local UserWantsplayerAim = false
+local UserWantsNPCAim = false
+local PredictionEnabled = false
+local HighlightEnabled = false
+local AutoKen = false
+local ZSkillorM1 = false
+local autoKenRunning = false
+
+local renderConnection = nil
+local currentTool = nil
+local playersaimbot = nil
+local PlayersPosition = nil
+local NPCaimbot = nil
+local NPCPosition = nil
+local currentHighlight = nil
+local currentTargetType = nil
+local Selectedplayer = nil
+
+local characterConnections = {}
+local Skills = {"X"}
+local Booms = {"TAP"}
+
+local PredictionAmount = 0.1
+local maxRange = 1000
+
+-- ============================================================
+--  WINDOW
+-- ============================================================
+local Window = Rayfield:CreateWindow({
+    Name = "Alien Hub",
+    LoadingTitle = "Alien Hub",
+    LoadingSubtitle = "v3 | initializing modules...",
+    ConfigurationSaving = {
+        Enabled = false
+    },
+    KeySystem = false
+})
+
+-- ============================================================
+--  TABS
+-- ============================================================
+local MainTab = Window:CreateTab("Main", "home")
+local CombatTab = Window:CreateTab("Combat", "swords")
+local SilentAimTab = Window:CreateTab("Silent Aim", "crosshair")
+local MovementTab = Window:CreateTab("Movement", "wind")
+local VisualTab = Window:CreateTab("Visuals", "eye")
+local PlayerTab = Window:CreateTab("Players", "users")
+local TeleportsTab = Window:CreateTab("Teleports", "map")
+local RacesTab = Window:CreateTab("Races", "dna")
+local ServerTab = Window:CreateTab("Server", "globe")
+
+local function Notify(title, text, duration)
+    Rayfield:Notify({
+        Title = title,
+        Content = text,
+        Duration = duration or 2,
+        Image = "bell"
+    })
+end
+
+-- ============================================================
+--  HELPER FUNCTIONS (Ally & PVP/Safezone Checks)
+-- ============================================================
+local function IsAlly(targetPlayer)
+    if not targetPlayer then return false end
+    if targetPlayer == player then return true end
+
+    local myData = player:FindFirstChild("Data")
+    local tData = targetPlayer:FindFirstChild("Data")
+    if myData and tData then
+        local myCrew = myData:FindFirstChild("CrewID")
+        local tCrew = tData:FindFirstChild("CrewID")
+        if myCrew and tCrew and myCrew.Value ~= "" and myCrew.Value == tCrew.Value then
+            return true
+        end
+    end
+
+    local pGui = player:FindFirstChild("PlayerGui")
+    if pGui then
+        local mainGui = pGui:FindFirstChild("Main")
+        if mainGui then
+            local alliesMenu = mainGui:FindFirstChild("Allies")
+            if alliesMenu then
+                local container = alliesMenu:FindFirstChild("Container")
+                if container then
+                    local alliesList = container:FindFirstChild("Allies")
+                    if alliesList then
+                        local scroll = alliesList:FindFirstChild("ScrollingFrame")
+                        if scroll then
+                            local frameList = scroll:FindFirstChild("Frame")
+                            if frameList and frameList:FindFirstChild(targetPlayer.Name) then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function GetPVPState(p, char)
+    if not char then return false end
+
+    local distFromIslands = p:GetAttribute("DistanceFromIslands")
+    if distFromIslands ~= nil and distFromIslands < 0 then
+        return false
+    end
+
+    local pvpDisabled = p:GetAttribute("PvpDisabled")
+    if pvpDisabled ~= nil then
+        return not pvpDisabled
+    end
+
+    if char:FindFirstChildOfClass("ForceField") then return false end
+
+    local pvpAttr = char:GetAttribute("PvP")
+    if pvpAttr ~= nil then return pvpAttr end
+
+    local pvpVal = char:FindFirstChild("PvP")
+    if pvpVal and pvpVal:IsA("BoolValue") then return pvpVal.Value end
+
+    return true
+end
+
+local function IsInCombat(p, char)
+    return GetPVPState(p, char) == true
+end
+
+-- ============================================================
+--  PASSIVE BUFFS
+-- ============================================================
+local function SetupCharacter(char)
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    if hrp then
+        hrp.ChildAdded:Connect(function(v)
+            if v:IsA("BodyVelocity") or v:IsA("BodyGyro") or v:IsA("BodyPosition") or v:IsA("BodyAngularVelocity") then
+                local name = v.Name:lower()
+                if (name:match("stun") or name:match("freeze") or name:match("ragdoll") or name:match("knockback") or name:match("root"))
+                and v.Name ~= "FlyVelocity" and v.Name ~= "FlyGyro" and v.Name ~= "FarmVelocity" then
+                    pcall(function() v:Destroy() end)
+                end
+            end
+        end)
+    end
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Stunned, false) end)
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false) end)
+    end
+end
+
+if player.Character then SetupCharacter(player.Character) end
+player.CharacterAdded:Connect(SetupCharacter)
+
+RunService.Heartbeat:Connect(function()
+    local char = player.Character
+    if not char then return end
+    char:SetAttribute("UnbreakableAll", true)
+    char:SetAttribute("Stun", 0)
+    char:SetAttribute("Stunned", false)
+    char:SetAttribute("CantMove", false)
+
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        if not Config.Fly then
+            pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false) end)
+            if hum.PlatformStand then
+                hum.PlatformStand = false
+            end
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    local char = player.Character
+    if not char then return end
+    for _, v in ipairs(char:GetChildren()) do
+        if v:IsA("BasePart") and v.CanCollide then
+            v.CanCollide = false
+        end
+    end
+end)
+
+-- ============================================================
+--  MOVEMENT | FLY
+-- ============================================================
+local FlyConnection = nil
+local bv, bg = nil, nil
+
+local function StopFly()
+    if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum and Config.Fly then hum.PlatformStand = false end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local oldBv = hrp:FindFirstChild("FlyVelocity")
+            local oldBg = hrp:FindFirstChild("FlyGyro")
+            if oldBv then oldBv:Destroy() end
+            if oldBg then oldBg:Destroy() end
+        end
+    end
+    bv, bg = nil, nil
+end
+
+local function StartFly()
+    StopFly()
+    FlyConnection = RunService.RenderStepped:Connect(function()
+        if not Config.Fly then StopFly() return end
+        local char = player.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        if not hrp or not hum then return end
+
+        if not bv or not bv.Parent then
+            bv = Instance.new("BodyVelocity")
+            bv.Name = "FlyVelocity"
+            bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            bv.Velocity = Vector3.new(0, 0, 0)
+            bv.Parent = hrp
+
+            bg = Instance.new("BodyGyro")
+            bg.Name = "FlyGyro"
+            bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+            bg.P = 9e4
+            bg.CFrame = hrp.CFrame
+            bg.Parent = hrp
+
+            hum.PlatformStand = true
+        end
+
+        local cam = workspace.CurrentCamera
+        local ctrl = {f=0, b=0, l=0, r=0}
+        ctrl.f = UserInputService:IsKeyDown(Enum.KeyCode.W) and 1 or 0
+        ctrl.b = UserInputService:IsKeyDown(Enum.KeyCode.S) and -1 or 0
+        ctrl.r = UserInputService:IsKeyDown(Enum.KeyCode.D) and 1 or 0
+        ctrl.l = UserInputService:IsKeyDown(Enum.KeyCode.A) and -1 or 0
+
+        local dir = (cam.CFrame.LookVector * (ctrl.f + ctrl.b)) + (cam.CFrame.RightVector * (ctrl.r + ctrl.l))
+        if dir.Magnitude > 0 then dir = dir.Unit end
+
+        bv.Velocity = dir * TweenSpeedVal
+        bg.CFrame = cam.CFrame
+    end)
+end
+
+player.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if Config.Fly then StartFly() end
+end)
+
+-- ============================================================
+--  AUTO HAKI & V4
+-- ============================================================
+local HakiThread = nil
+local function StopAutoHaki()
+    if HakiThread then task.cancel(HakiThread); HakiThread = nil end
+end
+local function StartAutoHaki()
+    StopAutoHaki()
+    HakiThread = task.spawn(function()
+        while Config.AutoHaki do
+            task.wait(0.2)
+            local char = player.Character
+            if char and not char:FindFirstChild("HasBuso") then
+                pcall(function() CommF:InvokeServer("Buso") end)
+            end
+        end
+    end)
+end
+
+local V4Thread = nil
+local V4DeathThread = nil
+local V4Cooldown = 0.4
+
+local function findAwakeningTool()
+    local char = player.Character
+    if not char then return end
+    return char:FindFirstChild("Awakening") or player.Backpack:FindFirstChild("Awakening")
+end
+
+local function StopAutoV4()
+    if V4Thread then task.cancel(V4Thread); V4Thread = nil end
+    if V4DeathThread then task.cancel(V4DeathThread); V4DeathThread = nil end
+end
+
+local function StartAutoV4()
+    StopAutoV4()
+    V4Thread = task.spawn(function()
+        while Config.AutoV4 do
+            task.wait(V4Cooldown)
+            local tool = findAwakeningTool()
+            if tool then
+                local remote = tool:FindFirstChildWhichIsA("RemoteFunction")
+                if remote then
+                    pcall(function() remote:InvokeServer(true) end)
+                end
+            end
+        end
+    end)
+
+    V4DeathThread = task.spawn(function()
+        while Config.AutoV4 do
+            task.wait(0.2)
+            local char = player.Character
+            if char and not char:GetAttribute("DeathHandled") then
+                local hum = char:FindFirstChild("Humanoid")
+                if hum and (hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead) then
+                    char:SetAttribute("DeathHandled", true)
+                    hum:ChangeState(Enum.HumanoidStateType.Dead)
+                    char:BreakJoints()
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================
+--  COMBAT | FLAGGED M1
+-- ============================================================
+local FlaggedM1Connection = nil
+local FlaggedRange = 10000
+local u4_flagged = nil
+local u5_flagged = nil
+
+local function getServerTime()
+    if workspace.GetServerTimeNow then return workspace:GetServerTimeNow() else return tick() end
+end
+
+local function DiscoverFlaggedRemote()
+    local _v2 = {
+        ReplicatedStorage.Util, ReplicatedStorage.Common, ReplicatedStorage.Remotes,
+        ReplicatedStorage.Assets, ReplicatedStorage.FX,
+    }
+    for _, folder in ipairs(_v2) do
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                if child:IsA("RemoteEvent") and child:GetAttribute("Id") then
+                    u5_flagged = child:GetAttribute("Id")
+                    u4_flagged = child
+                end
+            end
+        end
+    end
+end
+DiscoverFlaggedRemote()
+
+local function StopFlaggedM1()
+    if FlaggedM1Connection then FlaggedM1Connection:Disconnect(); FlaggedM1Connection = nil end
+end
+
+local function DoFlaggedFastAttack()
+    if not RegisterHit then return end
+    local _Character = player.Character
+    if not _Character then return end
+    local _HRP = _Character:FindFirstChild("HumanoidRootPart")
+    if not _HRP then return end
+    local _Tool = _Character:FindFirstChildOfClass("Tool")
+    if not _Tool then return end
+
+    local wt = _Tool:GetAttribute("WeaponType")
+    if wt ~= "Melee" and wt ~= "Sword" then return end
+
+    local _targets = {}
+    local enemies = workspace:FindFirstChild("Enemies")
+    local chars = workspace:FindFirstChild("Characters")
+
+    local function checkFolder(folder)
+        if not folder then return end
+        for _, v in ipairs(folder:GetChildren()) do
+            if v ~= _Character then
+                local vHRP = v:FindFirstChild("HumanoidRootPart")
+                local vHum = v:FindFirstChild("Humanoid")
+                if vHRP and vHum and vHum.Health > 0 and (vHRP.Position - _HRP.Position).Magnitude <= FlaggedRange then
+                    _targets[#_targets + 1] = {v, vHRP}
+                end
+            end
+        end
+    end
+
+    checkFolder(enemies)
+    checkFolder(chars)
+
+    if #_targets > 0 then
+        pcall(function()
+            if NetModule then NetModule:RemoteEvent("RegisterHit", true) end
+            if RegisterAttack then RegisterAttack:FireServer() end
+            local _Head = _targets[1][1]:FindFirstChild("Head")
+            if _Head then
+                local threadId = tostring(player.UserId):sub(2, 4) .. tostring(coroutine.running()):sub(11, 15)
+                RegisterHit:FireServer(_Head, _targets, {}, threadId)
+
+                if u4_flagged then
+                    local seedRemote = Net:FindFirstChild("seed")
+                    local seedVal = 0
+                    if seedRemote then pcall(function() seedVal = seedRemote:InvokeServer() end) end
+                    local fireRemote = cloneref(u4_flagged) or ReplicatedStorage:FindFirstChild(u4_flagged.Name) or u4_flagged
+
+                    local gsubResult = string.gsub("RE/RegisterHit", ".", function(c)
+                        local byteVal = string.byte(c)
+                        local timeVal = math.floor(getServerTime() / 10 % 10)
+                        return string.char(bit32.bxor(byteVal, timeVal + 1))
+                    end)
+
+                    fireRemote:FireServer(gsubResult, bit32.bxor(u5_flagged + 909090, seedVal * 2), _Head, _targets)
+                end
+            end
+        end)
+    end
+end
+
+local function StartFlaggedM1()
+    StopFlaggedM1()
+    FlaggedM1Connection = RunService.Heartbeat:Connect(function()
+        if not (Config.FlaggedM1 and Config.IsRunning) then StopFlaggedM1() return end
+        pcall(DoFlaggedFastAttack)
+    end)
+end
+
+-- ============================================================
+--  COMBAT | FRUIT AURA
+-- ============================================================
+local FruitM1Connection = nil
+local FruitM1Range = 100
+
+local function StopFruitM1()
+    if FruitM1Connection then FruitM1Connection:Disconnect(); FruitM1Connection = nil end
+end
+
+local function getFruit()
+    local bp = player.Backpack
+    if bp then
+        for _, v in ipairs(bp:GetChildren()) do
+            if v:GetAttribute("WeaponType") == "Demon Fruit" then return v end
+        end
+    end
+    if player.Character then
+        for _, v in ipairs(player.Character:GetChildren()) do
+            if v:GetAttribute("WeaponType") == "Demon Fruit" then return v end
+        end
+    end
+    return nil
+end
+
+local function getNearestTarget(myHRP)
+    local nearest = nil
+    local nearestDist = FruitM1Range
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local hum = p.Character:FindFirstChild("Humanoid")
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 then
+                local dist = (hrp.Position - myHRP.Position).Magnitude
+                if dist < nearestDist then nearestDist = dist; nearest = hrp end
+            end
+        end
+    end
+
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, npc in ipairs(enemies:GetChildren()) do
+            local hum = npc:FindFirstChild("Humanoid")
+            local hrp = npc:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 then
+                local dist = (hrp.Position - myHRP.Position).Magnitude
+                if dist < nearestDist then nearestDist = dist; nearest = hrp end
+            end
+        end
+    end
+    return nearest
+end
+
+local function StartFruitM1()
+    StopFruitM1()
+    FruitM1Connection = RunService.Heartbeat:Connect(function()
+        if not (Config.FruitM1 and Config.IsRunning) then StopFruitM1() return end
+        pcall(function()
+            local fruit = getFruit()
+            if fruit then
+                local rem = fruit:FindFirstChild("LeftClickRemote")
+                if rem then
+                    local myChar = player.Character
+                    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                    if myHRP then
+                        local targetHRP = getNearestTarget(myHRP)
+                        if targetHRP then
+                            local direction = (targetHRP.Position - myHRP.Position).Unit
+                            rem:FireServer(direction, 1, true)
+                        else
+                            rem:FireServer(Vector3.new(0.12, -0.5, -0.1), 1, true)
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+-- ============================================================
+--  COMBAT | BRING NPC (from victim hub script — logic intact)
+-- ============================================================
+local BringNPCEnabled = false
+local BringRange = 300
+local BringConnection = nil
+
+local function StopBringNPC()
+    if BringConnection then
+        BringConnection:Disconnect()
+        BringConnection = nil
+    end
+end
+
+local function StartBringNPC()
+    StopBringNPC()
+    BringConnection = RunService.Heartbeat:Connect(function()
+        if not BringNPCEnabled then StopBringNPC() return end
+        pcall(function()
+            local myHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not myHRP then return end
+
+            for _, R in pairs(workspace.Enemies:GetChildren()) do
+                if R:FindFirstChild("Humanoid") and R.Humanoid.Health > 0 and R.PrimaryPart then
+                    if (R.PrimaryPart.Position - myHRP.Position).Magnitude <= BringRange then
+                        R.PrimaryPart.CFrame = CFrame.new(myHRP.Position)
+                        R.PrimaryPart.CanCollide = true
+                        R.Humanoid.WalkSpeed = 0
+                        R.Humanoid.JumpPower = 0
+                        if R.Humanoid:FindFirstChild("Animator") then
+                            R.Humanoid.Animator:Destroy()
+                        end
+                        player.SimulationRadius = math.huge
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+-- ============================================================
+--  MOVEMENT | TWEEN
+-- ============================================================
+local TweenConnection = nil
+
+local function StopTween()
+    if TweenConnection then TweenConnection:Disconnect(); TweenConnection = nil end
+    if ActiveTween then ActiveTween:Cancel(); ActiveTween = nil end
+end
+
+local function GetNearestPlayerHRP(myHRP)
+    local nearest = nil
+    local nearestDist = math.huge
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and not IsAlly(p) and p.Character then
+            local char = p.Character
+            if IsInCombat(p, char) then
+                local hum = char:FindFirstChild("Humanoid")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hum and hrp and hum.Health > 0 then
+                    local dist = (hrp.Position - myHRP.Position).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist
+                        nearest = hrp
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function StartTween()
+    StopTween()
+    TweenConnection = RunService.Heartbeat:Connect(function()
+        if not (Config.TweenToPlayer or Config.TweenToNearest) then StopTween() return end
+
+        local myChar = player.Character
+        local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myHRP then return end
+
+        local tHRP = nil
+
+        if Config.TweenToPlayer then
+            local target = SelectedPlayer and Players:FindFirstChild(SelectedPlayer)
+            if target and target.Character then
+                tHRP = target.Character:FindFirstChild("HumanoidRootPart")
+            end
+        elseif Config.TweenToNearest then
+            tHRP = GetNearestPlayerHRP(myHRP)
+        end
+
+        if tHRP then
+            local dist = (myHRP.Position - tHRP.Position).Magnitude
+            if dist <= 100000 then
+                local targetVel = tHRP.AssemblyLinearVelocity
+                local timeToArrive = math.max(0.01, dist / TweenSpeedVal)
+                local predictedPos = tHRP.Position + (targetVel * timeToArrive)
+                local targetPos = predictedPos + Vector3.new(0, Config.YOffset, 0)
+                local targetCFrame = CFrame.new(targetPos)
+
+                if not ActiveTween or ActiveTween.PlaybackState ~= Enum.PlaybackState.Playing or (LastTargetPos - targetPos).Magnitude > 5 then
+                    if ActiveTween then ActiveTween:Cancel() end
+                    myHRP.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                    ActiveTween = TweenService:Create(myHRP, TweenInfo.new(timeToArrive, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
+                    ActiveTween:Play()
+                    LastTargetPos = targetPos
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================
+--  VISUALS | ESP
+-- ============================================================
+local ESPObjects = {}
+
+local function ClearESP()
+    for _, obj in pairs(ESPObjects) do
+        if obj and obj.billboard then pcall(function() obj.billboard:Destroy() end) end
+    end
+    ESPObjects = {}
+end
+
+local function CreateESP(target)
+    if not target:FindFirstChild("Head") then return end
+    local head = target:FindFirstChild("Head")
+    if head:FindFirstChild("NeonESP") then return end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "NeonESP"
+    billboard.Adornee = head
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = head
+
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.Text = target.Name
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 13
+    lbl.TextColor3 = Color3.fromRGB(0, 255, 255)
+    lbl.TextStrokeTransparency = 0.4
+    lbl.Parent = billboard
+
+    local espStroke = Instance.new("UIStroke")
+    espStroke.Color = Color3.new(0,0,0)
+    espStroke.Thickness = 2
+    espStroke.Transparency = 0.5
+    espStroke.Parent = lbl
+
+    table.insert(ESPObjects, {
+        billboard = billboard,
+        label = lbl,
+        hrp = target:FindFirstChild("HumanoidRootPart"),
+        target = target,
+        name = target.Name
+    })
+end
+
+local function SyncESP()
+    if not Config.ESP then return end
+
+    for i = #ESPObjects, 1, -1 do
+        local data = ESPObjects[i]
+        if not data.target or not data.target.Parent or not data.target:FindFirstChild("Head") or not data.hrp or not data.hrp.Parent then
+            if data.billboard then data.billboard:Destroy() end
+            table.remove(ESPObjects, i)
+        end
+    end
+
+    local function checkAndAdd(char)
+        if not char or not char:FindFirstChild("Head") then return end
+        local hasESP = false
+        for _, data in ipairs(ESPObjects) do
+            if data.target == char then hasESP = true break end
+        end
+        if not hasESP then CreateESP(char) end
+    end
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then checkAndAdd(p.Character) end
+    end
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, npc in pairs(enemies:GetChildren()) do checkAndAdd(npc) end
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if Config.ESP then
+            local myChar = player.Character
+            local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myHRP then
+                for _, data in ipairs(ESPObjects) do
+                    if data.billboard and data.billboard.Parent and data.hrp and data.hrp.Parent then
+                        local dist = math.floor((myHRP.Position - data.hrp.Position).Magnitude)
+                        data.label.Text = string.format("%s [%dm]", data.name, dist)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if Config.ESP then SyncESP() end
+    end
+end)
+
+-- ============================================================
+--  SILENT AIM | CORE LOGIC
+-- ============================================================
+local function getHRP(model)
+    if not model or not model:FindFirstChild("HumanoidRootPart") then return nil end
+    return model.HumanoidRootPart
+end
+
+local function clearConnections()
+    for _, conn in ipairs(characterConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    characterConnections = {}
+end
+
+local function getPredictedPosition(hrp)
+    if not hrp then return nil end
+
+    local humanoid = hrp.Parent:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return hrp.Position
+    end
+
+    if not PredictionEnabled or humanoid.WalkSpeed < 5 then
+        return hrp.Position
+    end
+
+    return hrp.Position + (hrp.Velocity * PredictionAmount)
+end
+
+local function isAllyWithMe(targetplayer)
+    local myGui = player:FindFirstChild("PlayerGui")
+    if not myGui then return false end
+
+    local scrolling = myGui:FindFirstChild("Main")
+        and myGui.Main:FindFirstChild("Allies")
+        and myGui.Main.Allies:FindFirstChild("Container")
+        and myGui.Main.Allies.Container:FindFirstChild("Allies")
+        and myGui.Main.Allies.Container.Allies:FindFirstChild("ScrollingFrame")
+
+    if scrolling then
+        for _, frame in pairs(scrolling:GetDescendants()) do
+            if frame:IsA("ImageButton") and frame.Name == targetplayer.Name then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function isEnemy(targetplayer)
+    if not targetplayer or targetplayer == player then
+        return false
+    end
+
+    local myTeam = player.Team
+    local targetTeam = targetplayer.Team
+
+    if myTeam and targetTeam then
+        if myTeam.Name == "Pirates" and targetTeam.Name == "Marines" then
+            return true
+        elseif myTeam.Name == "Marines" and targetTeam.Name == "Pirates" then
+            return true
+        end
+
+        if myTeam.Name == "Pirates" and targetTeam.Name == "Pirates" then
+            if isAllyWithMe(targetplayer) then
+                return false
+            end
+            return true
+        end
+
+        if myTeam.Name == "Marines" and targetTeam.Name == "Marines" then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function getClosestplayer(lpHRP)
+    if not lpHRP then return nil end
+
+    local closest = nil
+    local closestDist = math.huge
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= player and isEnemy(pl) and pl.Character and pl.Character.Parent ~= nil then
+            local hum = pl.Character:FindFirstChildWhichIsA("Humanoid")
+            local hrp = getHRP(pl.Character)
+            if hum and hum.Health > 0 and hrp then
+                local dist = (hrp.Position - lpHRP.Position).Magnitude
+                if dist <= maxRange and dist < closestDist then
+                    closestDist = dist
+                    closest = pl
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function getClosestNPC(lpHRP)
+    if not lpHRP then return nil end
+
+    local enemiesFolder = workspace:FindFirstChild("Enemies")
+    if not enemiesFolder then return nil end
+
+    local closest = nil
+    local closestDist = math.huge
+    for _, npc in ipairs(enemiesFolder:GetChildren()) do
+        if npc:IsA("Model") then
+            local hum = npc:FindFirstChildWhichIsA("Humanoid")
+            local hrp = getHRP(npc)
+            if hum and hum.Health > 0 and hrp then
+                local dist = (hrp.Position - lpHRP.Position).Magnitude
+                if dist <= maxRange and dist < closestDist then
+                    closestDist = dist
+                    closest = npc
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function applyHighlight(targetModel, targetType)
+    if not HighlightEnabled then return end
+    if not targetModel then return end
+    if currentHighlight and currentHighlight.Adornee == targetModel then return end
+
+    if currentHighlight then
+        currentHighlight:Destroy()
+        currentHighlight = nil
+        currentTargetType = nil
+    end
+
+    local hl = Instance.new("Highlight")
+    hl.FillColor = Color3.fromRGB(255, 255, 0)
+    hl.OutlineColor = Color3.fromRGB(255, 255, 0)
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0
+    hl.Adornee = targetModel
+    hl.Parent = targetModel
+    currentHighlight = hl
+    currentTargetType = targetType
+
+    VSkillModule:CheckVSkillUsage(SilentAimModule)
+end
+
+local function clearHighlight()
+    if currentHighlight then
+        currentHighlight:Destroy()
+        currentHighlight = nil
+        currentTargetType = nil
+    end
+end
+
+local function isSkillReadyForTool(toolName)
+    if not toolName then return false end
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+    local skillsFolder = playerGui:FindFirstChild("Main") and playerGui.Main:FindFirstChild("Skills")
+    if not skillsFolder then return false end
+    local toolFrame = skillsFolder:FindFirstChild(toolName)
+    if not toolFrame then return false end
+
+    for _, skillKey in ipairs({"Z","X","C","V"}) do
+        local skill = toolFrame:FindFirstChild(skillKey)
+        if skill and skill:FindFirstChild("Cooldown") and skill.Cooldown:IsA("Frame") then
+            local cooldownSize = skill.Cooldown.Size.X.Scale
+            if cooldownSize == 1.0 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function isNotDoughValidCondition()
+    return (currentTool and currentTool.Name == "Dough-Dough")
+end
+
+local function isNotValidCondition()
+    return (currentTool and currentTool.Name == "Lightning-Lightning")
+    or (currentTool and currentTool.Name == "Portal-Portal")
+end
+
+local function startRenderLoop()
+    if renderConnection then return end
+
+    renderConnection = RunService.RenderStepped:Connect(function()
+        local lpChar = player.Character
+        if not lpChar then return end
+        local lpHRP = lpChar:FindFirstChild("HumanoidRootPart")
+        if not lpHRP then return end
+
+        if not SilentAimPlayersEnabled and not SilentAimNPCsEnabled then
+            return
+        end
+
+        local targetModel = nil
+        local lookTargetPos = nil
+
+        if SilentAimPlayersEnabled then
+            local targetplayer = Selectedplayer or getClosestplayer(lpHRP)
+            if targetplayer and targetplayer ~= player and targetplayer.Character then
+                playersaimbot = targetplayer.Name
+                local hrp = getHRP(targetplayer.Character)
+                PlayersPosition = getPredictedPosition(hrp)
+                lookTargetPos = PlayersPosition
+                targetModel = targetplayer.Character
+                applyHighlight(targetModel, "player")
+            else
+                playersaimbot, PlayersPosition = nil, nil
+            end
+        elseif currentTargetType == "player" then
+            playersaimbot, PlayersPosition = nil, nil
+            clearHighlight()
+        end
+
+        if SilentAimNPCsEnabled then
+            local closestNPC = getClosestNPC(lpHRP)
+            if closestNPC then
+                NPCaimbot = closestNPC.Name
+                local hrp = getHRP(closestNPC)
+                NPCPosition = getPredictedPosition(hrp)
+                lookTargetPos = NPCPosition
+                if not targetModel then
+                    targetModel = closestNPC
+                    applyHighlight(targetModel, "NPC")
+                end
+            else
+                NPCaimbot, NPCPosition = nil, nil
+            end
+        elseif currentTargetType == "NPC" then
+            NPCaimbot, NPCPosition = nil, nil
+            clearHighlight()
+        end
+
+        if currentTool and lookTargetPos and isSkillReadyForTool(currentTool.Name) and not isNotDoughValidCondition() then
+            local lookVector = (Vector3.new(lookTargetPos.X, lpHRP.Position.Y, lookTargetPos.Z) - lpHRP.Position).Unit
+            lpHRP.CFrame = CFrame.new(lpHRP.Position, lpHRP.Position + lookVector)
+        end
+    end)
+end
+
+local function stopRenderLoop()
+    if renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
+    end
+end
+
+local function hookTool(tool)
+    currentTool = tool
+    table.insert(characterConnections, tool.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            currentTool = nil
+        end
+    end))
+end
+
+local function isValidCondition()
+    return (currentTool and currentTool.Name == "Buddy Sword")
+end
+
+spawn(function()
+    local ok, hookMeta = pcall(getrawmetatable, game)
+    if ok and hookMeta then
+        setreadonly(hookMeta, false)
+        local OldHook
+        OldHook = hookmetamethod(game, "__namecall", function(self, V1, V2, ...)
+            local Method = (getnamecallmethod and getnamecallmethod():lower()) or ""
+
+            if tostring(self) == "RemoteEvent" and Method == "fireserver" then
+                if typeof(V1) == "Vector3" then
+                    if SilentAimPlayersEnabled and PlayersPosition then
+                        return OldHook(self, PlayersPosition, V2, ...)
+                    elseif SilentAimNPCsEnabled and NPCPosition then
+                        return OldHook(self, NPCPosition, V2, ...)
+                    end
+                end
+                if type(V1) == "string" and table.find(Booms, V1) then
+                    if ZSkillorM1 then
+                        if SilentAimPlayersEnabled and PlayersPosition then
+                            return OldHook(self, V1, PlayersPosition, nil, ...)
+                        elseif SilentAimNPCsEnabled and NPCPosition then
+                            return OldHook(self, V1, NPCPosition, nil, ...)
+                        end
+                    end
+                end
+            elseif Method == "invokeserver" then
+                if isValidCondition() then
+                    if type(V1) == "string" and table.find(Skills, V1) then
+                        if SilentAimPlayersEnabled and PlayersPosition then
+                            return OldHook(self, V1, PlayersPosition, nil, ...)
+                        elseif SilentAimNPCsEnabled and NPCPosition then
+                            return OldHook(self, V1, NPCPosition, nil, ...)
+                        end
+                    end
+                end
+            end
+
+            return OldHook(self, V1, V2, ...)
+        end)
+        setreadonly(hookMeta, true)
+    end
+end)
+
+if not isNotValidCondition() then
+    if MouseModule and typeof(MouseModule) == "Instance" then
+        local ok2, okResult = pcall(function()
+            return require(MouseModule)
+        end)
+
+        if ok2 and okResult then
+            if type(okResult) == "table" then
+                Mouse = okResult
+            else
+                Mouse = nil
+            end
+        else
+            Mouse = nil
+        end
+
+        if Mouse then
+            local Character = player.Character or player.CharacterAdded:Wait()
+            local RootPart = Character and Character:FindFirstChild("HumanoidRootPart")
+
+            if RootPart then
+                pcall(function()
+                    if type(Mouse) == "table" then
+                        Mouse.Hit = CFrame.new(RootPart.Position)
+                        Mouse.Target = RootPart
+                    end
+                end)
+            else
+                task.spawn(function()
+                    local Character = player.Character or player.CharacterAdded:Wait()
+                    local RootPart = Character:WaitForChild("HumanoidRootPart")
+                    pcall(function()
+                        if type(Mouse) == "table" then
+                            Mouse.Hit = CFrame.new(RootPart.Position)
+                            Mouse.Target = RootPart
+                        end
+                    end)
+                end)
+            end
+
+            RunService.Heartbeat:Connect(function()
+                if not ZSkillorM1 or (not SilentAimPlayersEnabled and not SilentAimNPCsEnabled) then
+                    return
+                end
+
+                if Mouse and ZSkillorM1 and (SilentAimPlayersEnabled or SilentAimNPCsEnabled) then
+                    local targetCFrame = nil
+
+                    if PlayersPosition then
+                        targetCFrame = CFrame.new(PlayersPosition)
+                    elseif NPCPosition then
+                        targetCFrame = CFrame.new(NPCPosition)
+                    end
+
+                    if targetCFrame then
+                        pcall(function()
+                            if type(Mouse) == "table" then
+                                Mouse.Hit = targetCFrame
+                                Mouse.Target = nil
+                            end
+                        end)
+
+                        if MouseModule then
+                            local ok, MouseData = pcall(require, MouseModule)
+                            if ok and type(MouseData) == "table" then
+                                MouseData.Hit = targetCFrame
+                                MouseData.Target = nil
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end
+
+local HasTag = function(tagName)
+    local char = player.Character
+    if (not char) then return false; end
+    return Services.CollectionService:HasTag(char, tagName);
+end
+
+local function startAutoKenLoop()
+    if autoKenRunning then return end
+    autoKenRunning = true
+
+    task.spawn(function()
+        while AutoKen do
+            task.wait(0.1)
+
+            if HasTag("Ken") then
+                local playerGui = player:FindFirstChild("PlayerGui")
+                if playerGui then
+                    local kenButton = playerGui:FindFirstChild("MobileContextButtons")
+                    and playerGui.MobileContextButtons.ContextButtonFrame:FindFirstChild("BoundActionKen")
+
+                    if kenButton and kenButton:GetAttribute("Selected") ~= true then
+                        kenButton:SetAttribute("Selected", true)
+                    end
+                end
+
+                local observationManager = getrenv()._G.OM
+                if observationManager and not observationManager.active then
+                    observationManager.radius = 0
+                    observationManager:setActive(true)
+                    commE:FireServer("Ken", true)
+                end
+            end
+        end
+        autoKenRunning = false
+    end)
+end
+
+local function onCharacterAdded(char)
+    clearConnections()
+
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") then
+            hookTool(child)
+        end
+    end
+
+    table.insert(characterConnections, char.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then hookTool(child) end
+    end))
+
+    table.insert(characterConnections, char.ChildRemoved:Connect(function(child)
+        if child == currentTool then
+            currentTool = nil
+        end
+    end))
+end
+
+player.CharacterAdded:Connect(onCharacterAdded)
+if player.Character then onCharacterAdded(player.Character) end
+
+function SilentAimModule:SetAutoKen(state)
+    AutoKen = state
+    if state then
+        startAutoKenLoop()
+    end
+end
+
+function SilentAimModule:SetZSkillorM1(state)
+    ZSkillorM1 = state
+end
+
+function SilentAimModule:Pause()
+    SilentAimPlayersEnabled = false
+    SilentAimNPCsEnabled = false
+end
+
+function SilentAimModule:Restore()
+    SilentAimPlayersEnabled = UserWantsplayerAim
+    SilentAimNPCsEnabled = UserWantsNPCAim
+end
+
+startRenderLoop()
+
+-- ============================================================
+--  UI ELEMENTS | MAIN TAB
+-- ============================================================
+MainTab:CreateToggle({
+    Name = "Auto Haki",
+    CurrentValue = true,
+    Flag = "AutoHaki",
+    Callback = function(Value)
+        Config.AutoHaki = Value
+        if Value then
+            StartAutoHaki()
+            Notify("Auto Haki", "Enabled", 2)
+        else
+            StopAutoHaki()
+            Notify("Auto Haki", "Disabled", 2)
+        end
+    end
+})
+
+MainTab:CreateToggle({
+    Name = "Auto V4",
+    CurrentValue = true,
+    Flag = "AutoV4",
+    Callback = function(Value)
+        Config.AutoV4 = Value
+        if Value then
+            StartAutoV4()
+            Notify("Auto V4", "Enabled", 2)
+        else
+            StopAutoV4()
+            Notify("Auto V4", "Disabled", 2)
+        end
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | COMBAT TAB
+-- ============================================================
+CombatTab:CreateToggle({
+    Name = "Flagged M1s",
+    CurrentValue = true,
+    Flag = "FlaggedM1",
+    Callback = function(Value)
+        Config.FlaggedM1 = Value
+        if Value then
+            StartFlaggedM1()
+            Notify("Flagged M1s", "Enabled", 2)
+        else
+            StopFlaggedM1()
+            Notify("Flagged M1s", "Disabled", 2)
+        end
+    end
+})
+
+CombatTab:CreateSlider({
+    Name = "Flagged Range",
+    Range = {100, 10000},
+    Increment = 100,
+    Suffix = "studs",
+    CurrentValue = 10000,
+    Flag = "FlaggedRange",
+    Callback = function(Value)
+        FlaggedRange = Value
+    end
+})
+
+CombatTab:CreateToggle({
+    Name = "Fruit Aura",
+    CurrentValue = true,
+    Flag = "FruitM1",
+    Callback = function(Value)
+        Config.FruitM1 = Value
+        if Value then
+            StartFruitM1()
+            Notify("Fruit Aura", "Enabled", 2)
+        else
+            StopFruitM1()
+            Notify("Fruit Aura", "Disabled", 2)
+        end
+    end
+})
+
+CombatTab:CreateSlider({
+    Name = "Fruit Aura Range",
+    Range = {10, 500},
+    Increment = 10,
+    Suffix = "studs",
+    CurrentValue = 100,
+    Flag = "FruitRange",
+    Callback = function(Value)
+        FruitM1Range = Value
+    end
+})
+
+-- // Bring NPCs To You
+CombatTab:CreateToggle({
+    Name = "Bring NPCs To You",
+    CurrentValue = false,
+    Flag = "BringNPC",
+    Callback = function(Value)
+        BringNPCEnabled = Value
+        if Value then
+            StartBringNPC()
+            Notify("Bring NPC", "Enabled — pulling mobs in range", 2)
+        else
+            StopBringNPC()
+            Notify("Bring NPC", "Disabled", 2)
+        end
+    end
+})
+
+CombatTab:CreateSlider({
+    Name = "Bring Range",
+    Range = {50, 1000},
+    Increment = 50,
+    Suffix = "studs",
+    CurrentValue = 300,
+    Flag = "BringRange",
+    Callback = function(Value)
+        BringRange = Value
+    end
+})
+
+-- // Collect All Fruits
+CombatTab:CreateButton({
+    Name = "Collect All Fruits",
+    Callback = function()
+        local char = player.Character
+        if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+        local count = 0
+        for _, R in pairs(workspace:GetChildren()) do
+            if string.find(R.Name, "Fruit") and R:FindFirstChild("Handle") then
+                R.Handle.CFrame = char.HumanoidRootPart.CFrame
+                count = count + 1
+            end
+        end
+        Notify("Fruits", count > 0 and ("Pulled " .. count .. " fruits") or "No fruits on ground", 2)
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | SILENT AIM TAB
+-- ============================================================
+SilentAimTab:CreateToggle({
+    Name = "Silent Aim — Players",
+    CurrentValue = false,
+    Flag = "SAPlayers",
+    Callback = function(Value)
+        UserWantsplayerAim = Value
+        SilentAimPlayersEnabled = Value
+        Notify("Silent Aim", Value and "Players: ON" or "Players: OFF", 2)
+    end
+})
+
+SilentAimTab:CreateToggle({
+    Name = "Silent Aim — NPCs",
+    CurrentValue = false,
+    Flag = "SANPCs",
+    Callback = function(Value)
+        UserWantsNPCAim = Value
+        SilentAimNPCsEnabled = Value
+        Notify("Silent Aim", Value and "NPCs: ON" or "NPCs: OFF", 2)
+    end
+})
+
+SilentAimTab:CreateToggle({
+    Name = "Z Skill / M1 Redirection",
+    CurrentValue = false,
+    Flag = "ZSkillM1",
+    Callback = function(Value)
+        SilentAimModule:SetZSkillorM1(Value)
+        Notify("Z Skill/M1", Value and "Enabled" or "Disabled", 2)
+    end
+})
+
+SilentAimTab:CreateToggle({
+    Name = "Prediction",
+    CurrentValue = false,
+    Flag = "SAPrediction",
+    Callback = function(Value)
+        PredictionEnabled = Value
+        Notify("Prediction", Value and "Enabled" or "Disabled", 2)
+    end
+})
+
+SilentAimTab:CreateSlider({
+    Name = "Prediction Amount",
+    Range = {0, 1},
+    Increment = 0.01,
+    Suffix = "s",
+    CurrentValue = 0.1,
+    Flag = "SAPredictionAmount",
+    Callback = function(Value)
+        PredictionAmount = Value
+    end
+})
+
+SilentAimTab:CreateToggle({
+    Name = "Target Highlight",
+    CurrentValue = false,
+    Flag = "SAHighlight",
+    Callback = function(Value)
+        HighlightEnabled = Value
+        if not Value then clearHighlight() end
+        Notify("Highlight", Value and "Enabled" or "Disabled", 2)
+    end
+})
+
+SilentAimTab:CreateToggle({
+    Name = "Auto Ken (Observation)",
+    CurrentValue = false,
+    Flag = "AutoKen",
+    Callback = function(Value)
+        SilentAimModule:SetAutoKen(Value)
+        Notify("Auto Ken", Value and "Enabled" or "Disabled", 2)
+    end
+})
+
+SilentAimTab:CreateSlider({
+    Name = "Silent Aim Range",
+    Range = {50, 5000},
+    Increment = 50,
+    Suffix = "studs",
+    CurrentValue = 1000,
+    Flag = "SAMaxRange",
+    Callback = function(Value)
+        maxRange = Value
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | MOVEMENT TAB
+-- ============================================================
+MovementTab:CreateToggle({
+    Name = "Fly",
+    CurrentValue = true,
+    Flag = "Fly",
+    Callback = function(Value)
+        Config.Fly = Value
+        if Value then
+            StartFly()
+            Notify("Fly", "Enabled", 2)
+        else
+            StopFly()
+            Notify("Fly", "Disabled", 2)
+        end
+    end
+})
+
+MovementTab:CreateSlider({
+    Name = "Fly / Tween Speed",
+    Range = {50, 1000},
+    Increment = 10,
+    Suffix = "studs/s",
+    CurrentValue = 350,
+    Flag = "TweenSpeed",
+    Callback = function(Value)
+        TweenSpeedVal = Value
+    end
+})
+
+MovementTab:CreateToggle({
+    Name = "Tween to Selected Player",
+    CurrentValue = false,
+    Flag = "TweenPlayer",
+    Callback = function(Value)
+        Config.TweenToPlayer = Value
+        if Value then
+            if Config.TweenToNearest then
+                Config.TweenToNearest = false
+            end
+            StartTween()
+            Notify("Tween", "Targeting selected player", 2)
+        else
+            StopTween()
+            Notify("Tween Player", "Disabled", 2)
+        end
+    end
+})
+
+MovementTab:CreateToggle({
+    Name = "Tween to Nearest (PVP Only)",
+    CurrentValue = false,
+    Flag = "TweenNearest",
+    Callback = function(Value)
+        Config.TweenToNearest = Value
+        if Value then
+            if Config.TweenToPlayer then
+                Config.TweenToPlayer = false
+            end
+            StartTween()
+            Notify("Tween", "Targeting nearest combatant", 2)
+        else
+            StopTween()
+            Notify("Tween Nearest", "Disabled", 2)
+        end
+    end
+})
+
+MovementTab:CreateInput({
+    Name = "Tween Y Offset",
+    PlaceholderText = "0",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Text)
+        local val = tonumber(Text)
+        if val then
+            Config.YOffset = math.clamp(val, -10000, 10000)
+        end
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | VISUALS TAB
+-- ============================================================
+VisualTab:CreateToggle({
+    Name = "Player & NPC ESP",
+    CurrentValue = true,
+    Flag = "ESP",
+    Callback = function(Value)
+        Config.ESP = Value
+        if Value then
+            SyncESP()
+            Notify("ESP", "Enabled", 2)
+        else
+            ClearESP()
+            Notify("ESP", "Disabled", 2)
+        end
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | PLAYERS TAB
+-- ============================================================
+local playerNames = {}
+local function RefreshPlayerDropdown()
+    playerNames = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            table.insert(playerNames, p.Name)
+        end
+    end
+end
+RefreshPlayerDropdown()
+
+local PlayerDropdown = PlayerTab:CreateDropdown({
+    Name = "Select Target Player",
+    Options = playerNames,
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "TargetPlayer",
+    Callback = function(Option)
+        SelectedPlayer = Option[1]
+        if SelectedPlayer then
+            Selectedplayer = Players:FindFirstChild(SelectedPlayer)
+            Notify("Target Selected", SelectedPlayer, 2)
+        else
+            Selectedplayer = nil
+        end
+    end
+})
+
+PlayerTab:CreateButton({
+    Name = "Clear Selected Target",
+    Callback = function()
+        SelectedPlayer = nil
+        Selectedplayer = nil
+        PlayerDropdown:Set({})
+        Notify("Target", "Cleared — silent aim back to closest", 2)
+    end
+})
+
+PlayerTab:CreateButton({
+    Name = "Refresh Player List",
+    Callback = function()
+        RefreshPlayerDropdown()
+        PlayerDropdown:Refresh(playerNames)
+        Notify("Player List", "Refreshed", 2)
+    end
+})
+
+Players.PlayerAdded:Connect(function()
+    task.wait(1)
+    RefreshPlayerDropdown()
+    PlayerDropdown:Refresh(playerNames)
+end)
+Players.PlayerRemoving:Connect(function()
+    task.wait(1)
+    RefreshPlayerDropdown()
+    PlayerDropdown:Refresh(playerNames)
+end)
+
+-- ============================================================
+--  UI ELEMENTS | TELEPORTS TAB
+-- ============================================================
+local islandNames = {}
+local function RefreshIslands()
+    islandNames = {}
+    local locations = workspace:FindFirstChild("_WorldOrigin")
+        and workspace._WorldOrigin:FindFirstChild("Locations")
+    if locations then
+        for _, v in ipairs(locations:GetChildren()) do
+            table.insert(islandNames, v.Name)
+        end
+    end
+end
+RefreshIslands()
+
+local SelectedIsland = nil
+local IslandDropdown = TeleportsTab:CreateDropdown({
+    Name = "Select Island",
+    Options = islandNames,
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "SelIsland",
+    Callback = function(Option)
+        SelectedIsland = Option[1]
+    end
+})
+
+TeleportsTab:CreateButton({
+    Name = "Teleport to Island",
+    Callback = function()
+        if not SelectedIsland then
+            Notify("Teleport", "Select an island first", 2)
+            return
+        end
+        local locations = workspace:FindFirstChild("_WorldOrigin")
+            and workspace._WorldOrigin:FindFirstChild("Locations")
+        local part = locations and locations:FindFirstChild(SelectedIsland)
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if part and hrp then
+            hrp.CFrame = part.CFrame + Vector3.new(0, 10, 0)
+            Notify("Teleport", "Warped to " .. SelectedIsland, 2)
+        else
+            Notify("Teleport", "Island not found in this sea", 2)
+        end
+    end
+})
+
+TeleportsTab:CreateButton({
+    Name = "Refresh Island List",
+    Callback = function()
+        RefreshIslands()
+        IslandDropdown:Refresh(islandNames)
+        Notify("Teleport", "Island list refreshed", 2)
+    end
+})
+
+-- // NPC Teleport
+local npcNames = {}
+local function RefreshNPCs()
+    npcNames = {}
+    local npcs = workspace:FindFirstChild("NPCs")
+    if npcs then
+        for _, v in ipairs(npcs:GetChildren()) do
+            if v:IsA("Model") then
+                table.insert(npcNames, v.Name)
+            end
+        end
+    end
+end
+RefreshNPCs()
+
+local SelectedNPC = nil
+local NPCDropdown = TeleportsTab:CreateDropdown({
+    Name = "Select NPC",
+    Options = npcNames,
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "SelNPC",
+    Callback = function(Option)
+        SelectedNPC = Option[1]
+    end
+})
+
+TeleportsTab:CreateButton({
+    Name = "Teleport to NPC",
+    Callback = function()
+        if not SelectedNPC then
+            Notify("Teleport", "Select an NPC first", 2)
+            return
+        end
+        local npcs = workspace:FindFirstChild("NPCs")
+        local npc = npcs and npcs:FindFirstChild(SelectedNPC)
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        local target = npc and (npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChildWhichIsA("BasePart"))
+        if target and hrp then
+            hrp.CFrame = target.CFrame + Vector3.new(0, 5, 0)
+            Notify("Teleport", "Warped to " .. SelectedNPC, 2)
+        else
+            Notify("Teleport", "NPC not found", 2)
+        end
+    end
+})
+
+TeleportsTab:CreateButton({
+    Name = "Refresh NPC List",
+    Callback = function()
+        RefreshNPCs()
+        NPCDropdown:Refresh(npcNames)
+        Notify("Teleport", "NPC list refreshed", 2)
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | RACES TAB
+-- ============================================================
+local raceOptions = {"Human", "Skypiea", "FishMan", "Mink"}
+local SelectedRace = nil
+
+RacesTab:CreateDropdown({
+    Name = "Select Race",
+    Options = raceOptions,
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "SelRace",
+    Callback = function(Option)
+        SelectedRace = Option[1]
+    end
+})
+
+RacesTab:CreateButton({
+    Name = "Upgrade Race",
+    Callback = function()
+        if not SelectedRace then
+            Notify("Races", "Select a race first", 2)
+            return
+        end
+        local ok = pcall(function()
+            CommF:InvokeServer("UpgradeRace", SelectedRace)
+        end)
+        Notify("Races", ok and ("Upgrade request sent: " .. SelectedRace) or "Upgrade failed", ok and 2 or 3)
+    end
+})
+
+RacesTab:CreateButton({
+    Name = "Buy Race Reroll (3000F)",
+    Callback = function()
+        local ok = pcall(function()
+            CommF:InvokeServer("BlackbeardReward", "Reroll", "1")
+        end)
+        Notify("Races", ok and "Reroll purchased" or "Reroll failed", 2)
+    end
+})
+
+RacesTab:CreateButton({
+    Name = "Buy Ghoul Race",
+    Callback = function()
+        local ok = pcall(function()
+            CommF:InvokeServer("GhoulMark")
+        end)
+        if not ok then
+            pcall(function()
+                CommF:InvokeServer("BuyGhoulRace")
+            end)
+        end
+        Notify("Races", "Ghoul purchase attempt sent", 2)
+    end
+})
+
+RacesTab:CreateButton({
+    Name = "Buy Cyborg Race (2500F)",
+    Callback = function()
+        local ok = pcall(function()
+            CommF:InvokeServer("CyborgTrainer", "Buy")
+        end)
+        if not ok then
+            pcall(function()
+                CommF:InvokeServer("BuyCyborgRace")
+            end)
+        end
+        Notify("Races", "Cyborg purchase attempt sent", 2)
+    end
+})
+
+-- ============================================================
+--  UI ELEMENTS | SERVER TAB
+-- ============================================================
+local StoredJobID = ""
+
+-- // Copy Current Job ID
+ServerTab:CreateButton({
+    Name = "Copy Current Job ID",
+    Callback = function()
+        local jobId = game.JobId
+        if setclipboard then
+            setclipboard(jobId)
+            Notify("Server", "Job ID copied: " .. jobId, 3)
+        elseif toclipboard then
+            toclipboard(jobId)
+            Notify("Server", "Job ID copied: " .. jobId, 3)
+        else
+            Notify("Server", "No clipboard function available", 3)
+        end
+    end
+})
+
+-- // Job ID Input
+ServerTab:CreateInput({
+    Name = "Job ID",
+    PlaceholderText = "paste job id here",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Text)
+        StoredJobID = Text
+    end
+})
+
+-- // Join Job ID
+ServerTab:CreateButton({
+    Name = "Join Job ID",
+    Callback = function()
+        if not StoredJobID or StoredJobID == "" then
+            Notify("Server", "Enter a Job ID first", 3)
+            return
+        end
+        Notify("Server", "Joining job: " .. StoredJobID, 3)
+        task.wait(0.5)
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, StoredJobID, player)
+        end)
+    end
+})
+
+-- // Rejoin Server
+ServerTab:CreateButton({
+    Name = "Rejoin Server",
+    Callback = function()
+        Notify("Server", "Rejoining...", 2)
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId)
+        end)
+    end
+})
+
+-- // Hop to Random Server
+ServerTab:CreateButton({
+    Name = "Hop to Random Server",
+    Callback = function()
+        Notify("Server", "Finding server...", 2)
+        task.spawn(function()
+            local ok, err = pcall(function()
+                local servers = {}
+                local req = (http_request or request or http.request)
+                if not req then
+                    Notify("Server", "HTTP not supported by executor", 3)
+                    return
+                end
+
+                local cursor = ""
+                for attempt = 1, 5 do
+                    local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100" .. (cursor ~= "" and "&cursor=" .. cursor or "")
+                    local response = req({Url = url, Method = "GET"})
+                    local data = HttpService:JSONDecode(response.Body)
+
+                    for _, server in ipairs(data.data) do
+                        if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                            table.insert(servers, server.id)
+                        end
+                    end
+
+                    cursor = data.nextPageCursor or ""
+                    if cursor == "" then break end
+                end
+
+                if #servers > 0 then
+                    local target = servers[math.random(1, #servers)]
+                    Notify("Server", "Hopping to: " .. target, 2)
+                    task.wait(0.5)
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, target, player)
+                else
+                    Notify("Server", "No servers found", 3)
+                end
+            end)
+            if not ok then
+                Notify("Server", "Hop failed: " .. tostring(err), 3)
+            end
+        end)
+    end
+})
+
+-- // Hop to Least Players Server
+ServerTab:CreateButton({
+    Name = "Hop to Least Players Server",
+    Callback = function()
+        Notify("Server", "Scanning for emptiest server...", 2)
+        task.spawn(function()
+            local req = (http_request or request or http.request)
+            if not req then Notify("Server", "HTTP not supported", 3) return end
+            local best, bestCount = nil, math.huge
+            local cursor = ""
+            for attempt = 1, 3 do
+                local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100" .. (cursor ~= "" and "&cursor=" .. cursor or "")
+                local ok, data = pcall(function()
+                    return HttpService:JSONDecode(req({Url = url, Method = "GET"}).Body)
+                end)
+                if ok and data.data then
+                    for _, server in ipairs(data.data) do
+                        if server.id ~= game.JobId and server.playing < bestCount then
+                            bestCount = server.playing
+                            best = server.id
+                        end
+                    end
+                end
+                cursor = (ok and data.nextPageCursor) or ""
+                if cursor == "" then break end
+            end
+            if best then
+                Notify("Server", "Joining server with " .. bestCount .. " players", 2)
+                task.wait(0.5)
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, best, player)
+            else
+                Notify("Server", "No servers found", 3)
+            end
+        end)
+    end
+})
+
+-- // Hop Server (Game Browser — from victim hub script)
+ServerTab:CreateButton({
+    Name = "Hop Server (Game Browser)",
+    Description = "Uses the game's own server browser remote",
+    Callback = function()
+        Notify("Server", "Scanning via game browser...", 2)
+        task.spawn(function()
+            pcall(function()
+                for page = math.random(1, math.random(40, 75)), 100, 1 do
+                    local servers = ReplicatedStorage.__ServerBrowser:InvokeServer(page)
+                    for jobId, info in next, servers do
+                        if tonumber(info.Count) < 12 then
+                            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId)
+                            return
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+})
+
+-- // Spam Join Job ID
+local SpamJoinRunning = false
+ServerTab:CreateToggle({
+    Name = "Spam Join Job ID",
+    CurrentValue = false,
+    Flag = "SpamJoin",
+    Callback = function(Value)
+        SpamJoinRunning = Value
+        if Value then
+            task.spawn(function()
+                while SpamJoinRunning do
+                    if StoredJobID and StoredJobID ~= "" then
+                        pcall(function()
+                            TeleportService:TeleportToPlaceInstance(game.PlaceId, StoredJobID, player)
+                        end)
+                    end
+                    task.wait(2)
+                end
+            end)
+        end
+    end
+})
+
+-- ============================================================
+--  INITIALIZE DEFAULTS
+-- ============================================================
+task.spawn(function()
+    task.wait(0.5)
+    StartFly()
+    StartAutoHaki()
+    StartAutoV4()
+    StartFlaggedM1()
+    StartFruitM1()
+    SyncESP()
+    Notify("Alien Hub", "All modules loaded", 3)
+end)
